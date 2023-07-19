@@ -1,0 +1,434 @@
+---
+title: "LBB Logistic Regression & K-NN"
+author: "Muh Amri Sidiq"
+date: "`r Sys.Date()`"
+output:   
+  html_document:
+    theme: cosmo
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+# clear-up the environment
+rm(list = ls())
+
+# chunk options
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+
+options(scipen = 999)
+```
+
+
+# Introduction
+
+Machine learning mempunyai beberapa metode untuk memprediksi, saya akan melakukan prediksi terhadap dataset wholesale dengan melihat pengaruh variable baik itu berupa numerik ataupun categorik. Target yang akan digunakan pada prediksi kali ini yaitu Channel. Metode prediksi yang dilakukan akan menggunakan 2 metode yaitu Logistic Regression dan K-NN. Kita akan membandingkan kedua jenis metode dan akan menyimpulkan metode mana yang paling baik untuk digunakan pada prediksi kali ini.
+
+# Library
+
+Sebelum kita memulai kita akan menginstal beberapa library sebagai berikut:
+
+```{r}
+library(tidyverse)
+library(caret)
+library(plotly)
+library(ggplot2)
+library(GGally)
+library(dplyr)
+library(car)
+library(class)
+library(lmtest)
+library(gtools)
+```
+
+
+# Read Data & Data Understanding
+
+## Import Data
+
+Import data yang sudah kita siapkan yaitu wholesale.csv. Gunakan perintah read.csv sesuai dengan extension filenya
+
+```{r}
+wholesale <- read.csv("wholesale.csv")
+```
+
+## Data Inspection
+
+Kita lihat sekilas isi datanya dengan perintah Head ()
+
+```{r}
+head(wholesale)
+```
+
+Kita cek type datanya dengan perintah glimpse ()
+
+```{r}
+glimpse(wholesale)
+```
+
+Dari fungsi glimps di atas bisa kita lihat, data memiliki 440 row dan 8 coloumns. Berikut penjelasan mengenai variable nya:
+
+ - Channel          : Horeca (Hotel/Restaurant/Cafe or Retail channel (Nominal)
+ - Region           : Lisnon, Oporto or Other (Nominal)
+ - Fresh            : annual spending (m.u.) on fresh products (Continuous)
+ - Milk             : annual spending (m.u.) on milk products (Continuous)
+ - Grocery          : annual spending (m.u.)on grocery products (Continuous)
+ - Frozen           : annual spending (m.u.)on frozen products (Continuous)
+ - Detergents_Paper : annual spending (m.u.) on detergents and paper products (Continuous)
+ - Delicassen       : annual spending (m.u.)on and delicatessen products (Continuous)
+
+## Data Manipulation
+
+Change Type data
+
+```{r}
+wholesale_clean <- wholesale %>%
+  mutate(Channel = ifelse(Channel == 1, "Horeca", "Retail")) %>%
+  mutate(Channel = as.factor(Channel),
+         Region = as.factor(Region))
+```
+
+Check Missing values
+
+```{r}
+colSums(is.na(wholesale_clean))
+```
+
+
+# Exploratory Data Analysis
+
+Cek persebaran/pattern data
+
+```{r}
+summary(wholesale_clean)
+```
+
+
+# Logistic Regression
+
+## Cross validation
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(123)
+
+# index sampling
+index <- sample(nrow(wholesale_clean), nrow(wholesale_clean)*0.8)
+# splitting
+wholesale_train <- wholesale_clean[index,]
+wholesale_test <- wholesale_clean[-index,]
+```
+
+Cek Proporsi data pada wholesale_train
+
+```{r}
+prop.table(table(wholesale_train$Channel))
+```
+
+Data tidak balance, kita akan melakukan upsampling agar data balance
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+library(caret)
+
+wholesale_train_up <- upSample(x = wholesale_train %>% select(-Channel),
+                       y = wholesale_train$Channel,
+                       yname = "Channel")
+```
+
+Cek Proporsi data pada wholesale_train_up
+
+```{r}
+prop.table(table(wholesale_train_up$Channel))
+```
+
+## Modeling
+
+Kita akan membuat modeling dengan fungsi glm(), sebagai prediktor adalah semua variable dan targenya adalah channel 
+
+```{r}
+model_logistic <- glm(Channel ~ ., wholesale_train_up, family = "binomial") 
+summary(model_logistic)
+```
+
+Kita akan melakukan step-wise untuk mencari nilai AIC yang terkecil/ mencari informasi loss yang paming kecil dari model kita
+
+```{r}
+model_step <- step(model_logistic, direction = "backward", trace = F)
+summary(model_step)
+```
+
+
+Kita akan memprediksi wholesale_test dengan fungsi predic bedasarkan model_step 
+
+## Predict
+
+```{r}
+pred_test_Log <- predict(model_step, type = "response", newdata = wholesale_test)
+```
+
+Dari grafik di bawah ini, hasil prediksi dapat di interpretasikan nilainya lebih condong ke arah 0 yaitu horeca
+
+```{r}
+ggplot(wholesale_test, aes(x=pred_test_Log)) +
+  geom_density(lwd=0.5) +
+  labs(title = "Distribution Prediction Data Channel") +
+  theme_minimal()
+```
+
+Pada grafik diatas, dapat diinterpretasikan bahwa hasil prediksi yang dilakukan lebih condong ke arah 1 yang artinya Retail.
+
+```{r}
+pred_wholesale_test <- ifelse(pred_test_Log > 0.5, "Retail", "Horeca") %>% as.factor()
+```
+
+## Model Evaluation
+
+Untuk mengevaluasi model yang telah kita buat, kita akan menggunakan confusion matrix
+
+```{r}
+wholesale_log_con <- confusionMatrix(pred_wholesale_test, wholesale_test$Channel, positive = "Retail")
+wholesale_log_con
+```
+
+- Sensitivity = ukuran kebaikan model terhadap kelas positif
+- Specificity = ukuran kebaikan model terhadap kelas negatif
+- Accuracy = seberapa tepat model kita memprediksi kelas target (secara global)
+- Precision = seberapa presisi model memprediksi kelas positif
+
+
+```{r}
+Recall <- round(24/(24+7),2)
+Specificity <- round((54)/(3+54),2)
+Accuracy <- round((54+24)/nrow(wholesale_test),2)
+Precision <- round(24/(24+3),2)
+
+performance <- cbind.data.frame(Accuracy, Recall, Precision, Specificity)
+performance
+```
+
+## Tuning Cutoff
+
+Digunakan untuk mengetahui threshold maksimum dari apa yang akan kita teliti.
+
+```{r}
+performa <- function(cutoff, prob, ref, postarget, negtarget) 
+{
+  predict <- factor(ifelse(prob >= cutoff, postarget, negtarget))
+  conf <- caret::confusionMatrix(predict , ref, positive = postarget)
+  acc <- conf$overall[1]
+  rec <- conf$byClass[1]
+  prec <- conf$byClass[3]
+  spec <- conf$byClass[2]
+  mat <- t(as.matrix(c(rec , acc , prec, spec))) 
+  colnames(mat) <- c("recall", "accuracy", "precicion", "specificity")
+  return(mat)
+}
+
+co <- seq(0.01,0.80,length=100)
+result <- matrix(0,100,4)
+
+for(i in 1:100){
+  result[i,] = performa(cutoff = co[i], 
+                     prob = pred_test_Log, 
+                     ref = wholesale_test$Channel, 
+                     postarget = "Retail", 
+                     negtarget = "Horeca")
+}
+
+data_frame("Recall" = result[,1],
+           "Accuracy" = result[,2],
+           "Precision" = result[,3],
+           "Specificity" = result[,4],
+                   "Cutoff" = co) %>% 
+  gather(key = "performa", value = "value", 1:4) %>% 
+  ggplot(aes(x = Cutoff, y = value, col = performa)) +
+  geom_line(lwd = 1.5) +
+  scale_color_manual(values = c("darkred","darkgreen","orange", "blue")) +
+  scale_y_continuous(breaks = seq(0,1,0.1), limits = c(0,1)) +
+  scale_x_continuous(breaks = seq(0,1,0.1)) +
+  labs(title = "Tradeoff model perfomance") +
+  theme_minimal() +
+  theme(legend.position = "top",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank())
+```
+
+Berdasarkan Tradeoff model performance diatas, dapat kita tahu bahwa dengan cutoff 0.5 kita memperoleh nilai specifity, accuracy dan precision lebih tingggi, namun nilai recall agak rendah.
+
+## Model Interpretation
+
+```{r}
+# Odds ratio all coefficients
+exp(model_step$coefficients) %>% 
+  data.frame() 
+```
+
+Interpretasi model : Semua odd di model_step memenuhi barang di retail dengan prosentase yang berbeda-beda.
+
+# K-NN 
+
+Kita akan menggunakan data sebelumnya dengan menggunakan machine learning type K-NN
+
+## Read Data
+
+```{r}
+head(wholesale_clean)
+```
+
+## Data Wrangling
+
+Cek type data
+
+```{r}
+glimpse(wholesale_clean)
+```
+
+Kita hanya akan menggunakan data type numerik sebagai prediktor 
+
+```{r}
+wholesale_knn <- wholesale_clean %>% select(-Region)
+```
+
+## Exploratory Data Analysis
+
+Cek proporsi Kelas
+
+```{r}
+prop.table(table(wholesale_knn$Channel))
+```
+## Cross Validation
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(123)
+
+# index sampling
+index <- sample(nrow(wholesale_knn), nrow(wholesale_knn)*0.8)
+# splitting
+wholesale_knn_train <- wholesale_knn[index,]
+wholesale_knn_test <- wholesale_knn[-index,] # data yang tidak masuk train
+```
+
+Cek Proporsi data pada wholesale_knn_train
+
+```{r}
+prop.table(table(wholesale_knn_train$Channel))
+```
+
+Data tidak balance kita akan melakukan upsampling
+
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+library(caret)
+
+wholesale_knn_train_up <- upSample(x = wholesale_knn_train %>% select(-Channel),
+                       y = wholesale_knn_train$Channel,
+                       yname = "Channel")
+```
+
+Cek Proporsi data pada wholesale_train_up
+
+```{r}
+prop.table(table(wholesale_knn_train_up$Channel))
+```
+
+## Data Pre-Processing
+
+Untuk k-NN, dipisahkan antara prediktor dan label (target variabelnya).
+
+```{r}
+# prediktor data train
+wholesale_knn_train_x <- wholesale_knn_train_up %>% select_if(is.numeric) 
+
+# target data train
+wholesale_knn_train_y <- wholesale_knn_train_up[,"Channel"]
+
+# prediktor data test
+wholesale_knn_test_x <- wholesale_knn_test %>% select_if(is.numeric)
+
+# target data test
+wholesale_knn_test_y <- wholesale_knn_test[,"Channel"]
+```
+
+Tahap selanjutnya kita akan melakukan scaling di data train 
+
+```{r}
+# scaling data
+# train
+wholesale_knn_train_xs <- scale(x = wholesale_knn_train_x) # data prediktor untuk data train
+
+# test
+wholesale_knn_test_xs <- scale(x = wholesale_knn_test_x,
+                      center = attr(wholesale_knn_train_xs, "scaled:center"), #nilai rata rata data
+                      scale = attr(wholesale_knn_train_xs,"scaled:scale")) # nilai data train
+```
+
+Menentukan nilai K dengan rumus di bawah ini
+
+```{r}
+sqrt(nrow(wholesale_knn_train))
+```
+
+K Optimum = 19
+
+```{r}
+library(class) 
+pred_knn_wholsesale <- knn(train = wholesale_knn_train_xs, # prediktor data train
+                test = wholesale_knn_test_xs, # prediktor data test
+                cl = wholesale_knn_train_y, # label dari data train
+                k = 19)
+head(pred_knn_wholsesale)
+```
+
+## Model evaluation
+
+```{r}
+# confusion matrix
+library(caret)
+wholesale_knn_conf <- confusionMatrix(pred_knn_wholsesale, wholesale_knn_test_y, positive = "Retail")
+wholesale_knn_conf
+```
+
+# Model Evaluation Logistic Regression and K-NN
+
+```{r}
+eval_wholesale_log <- data_frame(Accuracy = wholesale_log_con$overall[1],
+                                 Recall = wholesale_log_con$byClass[1],
+                                 Specificity = wholesale_log_con$byClass[2],
+                                 Precision = wholesale_log_con$byClass[3])
+
+eval_wholesale_knn <- data_frame(Accuracy = wholesale_knn_conf$overall[1],
+                                 Recall = wholesale_knn_conf$byClass[1],
+                                 Specificity = wholesale_knn_conf$byClass[2],
+                                 Precision = wholesale_knn_conf$byClass[3])
+```
+
+
+```{r}
+# Model Evaluation Logistic Regretion
+eval_wholesale_log
+```
+
+```{r}
+# Model Evaluation K-NN
+eval_wholesale_knn
+```
+
+Jika dilihat dari kedua metode tersebut, yaitu dengan menggunakan Regresi Logistik dan K-NN, seberapa mampu proporsi model saya menebak benar Channel yang Retail lebih baik dengan menggunakan metode K-NN karena memiliki nilai Recall= 87,1% lebih besar dari pada menggunakan metode regresi logistik.
+
+# Conclusion
+
+Jika saya seorang wholesale manager dengan melihat kebaikan model menebak yang benar maka saya akan menggunakan model K-NN. Jika prediksi barang masuk ke Retail padahal actualnya ke Horeca maka resikonya Retail akan kehabisan stock. Oleh karena itu saya akan mengunakan matrix Recall dengan melihat ukuran kebaikan model terhadap kelas positif  
+
+
